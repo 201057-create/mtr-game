@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MTR 3D 終極駕駛模擬 (8卡編組 + 實體手柄 + 自由視角)</title>
+    <!-- 引入 Three.js 引擎 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: '-apple-system', sans-serif; user-select: none; touch-action: none; }
+        
+        /* 遊戲容器，接收拖曳事件 */
+        #game-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; cursor: grab; }
+        #game-container:active { cursor: grabbing; }
+
+        /* 左上角儀表板 */
+        #hud {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(0, 0, 0, 0.8); padding: 15px 25px; border-radius: 12px;
+            border-left: 5px solid #ed1d24; color: white; pointer-events: none;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 20;
+        }
+        .hud-text { font-size: 22px; font-weight: bold; margin: 8px 0; }
+        .highlight { color: #00ff00; font-family: monospace; font-size: 26px;}
+        .warning { color: #ffaa00; }
+        .danger { color: #ff4444; }
+        .station-name { font-size: 24px; font-weight: 900; text-shadow: 1px 1px 2px black; }
+        
+        /* 右上角視角切換按鈕 */
+        #btn-camera {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(255, 255, 255, 0.2); border: 2px solid white; color: white;
+            padding: 10px 20px; border-radius: 20px; font-size: 18px; font-weight: bold;
+            cursor: pointer; z-index: 10; backdrop-filter: blur(5px);
+            transition: 0.3s;
+        }
+        #btn-camera.manual-mode { border-color: #ffaa00; color: #ffaa00; }
+        #btn-camera.driver-mode { border-color: #00ff00; color: #00ff00; }
+        #btn-camera.passenger-mode { border-color: #42a5f5; color: #42a5f5; }
+
+        /* 升級版：頂部通知橫幅 (取代原本中間的提示) */
+        #message-box {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            font-size: 20px; font-weight: bold; color: white;
+            background: rgba(0, 0, 0, 0.85); padding: 12px 30px; border-radius: 30px;
+            border: 2px solid rgba(255,255,255,0.2); box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            text-align: center; pointer-events: none; z-index: 20;
+            white-space: pre-wrap; /* 支援多行顯示 */
+            transition: opacity 0.3s;
+        }
+        
+        /* 當沒有文字時自動隱藏 */
+        #message-box:empty { display: none; }
+
+        /* 獨立出來的開關門全息圖案容器 */
+        #hologram-box {
+            position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+            text-align: center; pointer-events: none; z-index: 10;
+        }
+
+        /* 底部操作區 */
+        #controls-container {
+            position: absolute; bottom: 30px; left: 0; width: 100%;
+            display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 0 20px; box-sizing: border-box; z-index: 10;
+        }
+        .control-row { display: flex; gap: 20px; width: 100%; justify-content: center; }
+        
+        /* ======= 左側獨立車門控制按鈕 ======= */
+        #door-controls {
+            display: none; /* 預設隱藏，到站後由 JS 改為 flex */
+            position: absolute; left: 30px; bottom: 30px;
+            flex-direction: row; gap: 15px; z-index: 50; /* 確保在最上層 */
+        }
+
+        .door-btn {
+            width: 75px; height: 75px;
+            border-radius: 50%; border: 3px solid rgba(255,255,255,0.4);
+            cursor: pointer; display: flex; justify-content: center; align-items: center;
+            box-shadow: 0 6px 15px rgba(0,0,0,0.6);
+            -webkit-tap-highlight-color: transparent; transition: transform 0.1s;
+        }
+        
+        .door-btn:active { transform: scale(0.9); }
+        .door-btn svg { width: 38px; height: 38px; }
+
+        #btn-door-open { background: linear-gradient(135deg, #42a5f5, #1565c0); color: white; }
+        #btn-door-close { background: linear-gradient(135deg, #ffa726, #e65100); color: white; }
+
+        .btn {
+            flex: 1; max-width: 250px; padding: 20px 0; font-size: 24px; font-weight: bold;
+            border-radius: 16px; border: none; cursor: pointer; box-shadow: 0 6px 15px rgba(0,0,0,0.5);
+            -webkit-tap-highlight-color: transparent; transition: transform 0.1s, filter 0.2s;
+        }
+        .btn:active { transform: scale(0.95); }
+
+        #btn-next-station {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 15px 40px; font-size: 24px; font-weight: bold; background-color: #ed1d24;
+            color: white; border: 3px solid white; border-radius: 30px; cursor: pointer; display: none; z-index: 100;
+        }
+
+        /* ======= 全新駕駛控制手柄 UI ======= */
+        #lever-container {
+            position: absolute; right: 20px; bottom: 30px; width: 140px; height: 180px; z-index: 20;
+        }
+        #lever-track {
+            position: absolute; right: 20px; top: 10px; width: 60px; height: 160px;
+            background: linear-gradient(to right, #222, #444, #222);
+            border-radius: 30px; border: 3px solid #111;
+            box-shadow: 0 0 10px rgba(0,0,0,0.8) inset;
+        }
+        #lever-handle {
+            width: 90px; height: 50px;
+            background: linear-gradient(to bottom, #f0f0f0, #aaa);
+            border-radius: 10px; position: absolute; left: -15px; top: 55px; /* 預設中間 55px */
+            cursor: grab;
+            box-shadow: 0 6px 15px rgba(0,0,0,0.6), inset 0 2px 2px rgba(255,255,255,0.8);
+            border: 2px solid #555; touch-action: none;
+            display: flex; justify-content: center; align-items: center; z-index: 2;
+        }
+        #lever-handle:active { cursor: grabbing; }
+        #lever-handle::after {
+            content: '|||'; color: #555; font-weight: bold; letter-spacing: 2px;
+        }
+        .lever-label {
+            position: absolute; right: 80px; font-weight: bold; font-size: 20px;
+            text-shadow: 1px 1px 2px #000; pointer-events: none; white-space: nowrap;
+            text-align: right;
+        }
+        .lever-label.top { top: 10px; color: #f44336; }
+        .lever-label.center { top: 75px; color: #ccc; }
+        .lever-label.bottom { bottom: 15px; color: #4CAF50; }
+
+        /* ======= 方向掣 (Reverser) ======= */
+        #reverser-controls {
+            position: absolute; right: 170px; bottom: 30px; z-index: 20;
+            display: flex; flex-direction: column; gap: 15px;
+        }
+        .dir-btn {
+            background: rgba(0,0,0,0.7); color: #777; border: 2px solid #555;
+            padding: 12px 20px; border-radius: 12px; font-size: 20px; font-weight: bold;
+            cursor: pointer; transition: all 0.2s ease;
+        }
+        .dir-btn.active {
+            background: rgba(0, 255, 0, 0.2); color: #00ff00; border-color: #00ff00;
+            box-shadow: 0 0 10px rgba(0,255,0,0.5);
+        }
+        .dir-btn.active.rev {
+            background: rgba(255, 170, 0, 0.2); color: #ffaa00; border-color: #ffaa00;
+            box-shadow: 0 0 10px rgba(255,170,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container"></div>
+
+    <div id="hud">
+        <div class="hud-text">目的地: <span id="station-display" class="station-name">尖沙咀</span></div>
+        <div class="hud-text">速度: <span id="speed-display" class="highlight">0</span> km/h</div>
+        <div class="hud-text">距離: <span id="dist-display" class="highlight">0</span> m</div>
+    </div>
+
+    <button id="btn-camera" onclick="toggleCameraMode()">🎥 自動視角</button>
+
+    <div id="message-box">歡迎值班！請先開啟車門上客<br><span style="font-size: 16px; color: #ccc;">(提示：車內可用手指導航及縮放)</span></div>
+    <div id="hologram-box"></div>
+    
+    <button id="btn-next-station" onclick="goToNextStation()">關門後，駛往下一站</button>
+
+    <!-- 左下角圖案化車門控制 -->
+    <div id="door-controls">
+        <button class="door-btn" id="btn-door-open" onclick="operateDoors('open')" title="開啟車門">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 12h8m0 0l-3-3m3 3l-3 3M10 12H2m0 0l3-3m-3 3l3 3M10 4v16M14 4v16"/>
+            </svg>
+        </button>
+        <button class="door-btn" id="btn-door-close" onclick="operateDoors('close')" title="關閉車門">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 12h-8m0 0l3-3m-3 3l3 3M2 12h8m0 0l-3-3m3 3l-3 3M10 4v16M14 4v16"/>
+            </svg>
+        </button>
+    </div>
+
+    <!-- 方向掣 (Reverser) -->
+    <div id="reverser-controls">
+        <button class="dir-btn active" id="btn-dir-fwd" onclick="setDirection(1)">⬆️ 前進</button>
+        <button class="dir-btn" id="btn-dir-rev" onclick="setDirection(-1)">⬇️ 退後</button>
+    </div>
+
+    <!-- 實體駕駛手柄 (獨立移至右下角) -->
+    <div id="lever-container">
+        <div id="lever-track">
+            <div id="lever-handle"></div>
+            <div class="lever-label top">制動</div>
+            <div class="lever-label center">惰行</div>
+            <div class="lever-label bottom">牽引</div>
+        </div>
+    </div>
+
+    <script>
+        // ================= 核心變數與路線設定 =================
+        let scene, camera, renderer;
+        let train;
+        
+        const stationsData = [
+            { name: "中環 Central", color: 0x8B0000, cssColor: '#8B0000' }, // 磚紅色
+            { name: "金鐘 Admiralty", color: 0x1E90FF, cssColor: '#1E90FF' }, // 金鐘藍
+            { name: "尖沙咀 Tsim Sha Tsui", color: 0xFFCC00, cssColor: '#FFCC00' }, 
+            { name: "佐敦 Jordan", color: 0x8BC34A, cssColor: '#8BC34A' },        
+            { name: "油麻地 Yau Ma Tei", color: 0xCCCCCC, cssColor: '#CCCCCC' },    
+            { name: "旺角 Mong Kok", color: 0xD32F2F, cssColor: '#D32F2F' },       
+            { name: "太子 Prince Edward", color: 0x9C27B0, cssColor: '#9C27B0' },
+            { name: "深水埗 Sham Shui Po", color: 0x006400, cssColor: '#006400' },
+            { name: "長沙灣 Cheung Sha Wan", color: 0xC2B280, cssColor: '#C2B280' },
+            { name: "荔枝角 Lai Chi Kok", color: 0xFF7F50, cssColor: '#FF7F50' },
+            { name: "美孚 Mei Foo", color: 0x0000CD, cssColor: '#0000CD' },
+            { name: "荔景 Lai King", color: 0xB22222, cssColor: '#B22222' },
+            { name: "葵芳 Kwai Fong", color: 0x2E8B57, cssColor: '#2E8B57' },
+            { name: "葵興 Kwai Hing", color: 0xFFD700, cssColor: '#FFD700' },
+            { name: "大窩口 Tai Wo Hau", color: 0x8B0000, cssColor: '#8B0000' },
+            { name: "荃灣 Tsuen Wan", color: 0xed1d24, cssColor: '#ed1d24' }
+        ];
+        let currentStationIndex = 0;
+        let stopMarkZ = -12.5; 
+
+        let speed = 0;
+        let perfectlyStopped = false;
+        let doorProgress = 0, targetDoorProgress = 0;
+        
+        let doorsArray = [];
+        let psdDoorsArray = []; 
+        let isOverrun = false; 
+        let frontGlass = null; 
+        let windowMat = null; 
+        
+        let driverLever3D = null; // 控制駕駛室內部的3D手柄
+        let leverValue = 0; // 手柄數值: 1 (全速牽引) 到 -1 (全力制動)，0為惰行
+        let doorsClosedMsgShown = false; // 新增：防止重複顯示關門訊息
+        let currentDirection = 1; // 1 = 前進, -1 = 退後
+
+        // 視角變數與自由鏡頭 (Free Look)
+        let cameraMode = 'auto'; 
+        let camAngleX = 0.15, camAngleY = 0.3, camRadius = 85; 
+        let passAngleX = 0, passAngleY = 0; 
+        let currentFov = 60; 
+        let isDragging = false;
+        let previousMouseX = 0, previousMouseY = 0;
+
+        // ================= 初始設置 =================
+        function init() {
+            const container = document.getElementById('game-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111); 
+            scene.fog = new THREE.Fog(0x111111, 50, 1000);
+
+            camera = new THREE.PerspectiveCamera(currentFov, window.innerWidth / window.innerHeight, 0.1, 2000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(0, 100, 0);
+            scene.add(dirLight);
+
+            createWorld();
+            createTrain();
+            
+            updateHUDStation(); 
+
+            window.addEventListener('resize', onWindowResize, false);
+            setupLeverControl(); // 初始化手柄
+            setupCameraControls(); 
+            animate();
+        }
+
+        function updateHUDStation() {
+            const stDisplay = document.getElementById('station-display');
+            stDisplay.innerText = stationsData[currentStationIndex].name;
+            stDisplay.style.color = stationsData[currentStationIndex].cssColor;
+        }
+
+        // ================= 生成連貫世界與所有車站幕門 =================
+        function createTextTexture(text, themeCssColor) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 512; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 512, 128);
+            ctx.fillStyle = themeCssColor; 
+            ctx.fillRect(0, 0, 512, 15); ctx.fillRect(0, 113, 512, 15);
+            ctx.fillStyle = '#000000'; ctx.font = 'bold 44px sans-serif';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText(text, 256, 64);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createWorld() {
+            // 大幅加長路軌以容納 16 個車站 (原 25000 -> 80000)
+            const trackLength = 80000; 
+            const trackCenterZ = -38000;
+
+            const bedGeo = new THREE.PlaneGeometry(80, trackLength);
+            const bedMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+            const trackBed = new THREE.Mesh(bedGeo, bedMat);
+            trackBed.rotation.x = -Math.PI / 2; trackBed.position.y = -0.9; trackBed.position.z = trackCenterZ;
+            scene.add(trackBed);
+
+            const railGeo = new THREE.BoxGeometry(0.5, 0.5, trackLength);
+            const railMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.8 });
+            const railLeft = new THREE.Mesh(railGeo, railMat); railLeft.position.set(-2, -0.6, trackCenterZ); scene.add(railLeft);
+            const railRight = new THREE.Mesh(railGeo, railMat); railRight.position.set(2, -0.6, trackCenterZ); scene.add(railRight);
+
+            const tunnelMat = new THREE.MeshLambertMaterial({ color: 0x151515 }); 
+            const leftWallGeo = new THREE.BoxGeometry(1, 18, trackLength);
+            const leftWall = new THREE.Mesh(leftWallGeo, tunnelMat);
+            leftWall.position.set(-10, 8, trackCenterZ);
+            scene.add(leftWall);
+
+            const rightWallGeo = new THREE.BoxGeometry(1, 18, trackLength);
+            const rightWall = new THREE.Mesh(rightWallGeo, tunnelMat);
+            rightWall.position.set(20.5, 8, trackCenterZ);
+            scene.add(rightWall);
+
+            const ceilingGeo = new THREE.BoxGeometry(32, 1, trackLength);
+            const ceiling = new THREE.Mesh(ceilingGeo, tunnelMat);
+            ceiling.position.set(5.25, 16.5, trackCenterZ);
+            scene.add(ceiling);
+
+            const poleGeo = new THREE.CylinderGeometry(0.2, 0.2, 10);
+            const poleMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+            // 延長電線桿的分佈範圍 (原 -20000 -> -70000)
+            for (let i = 200; i > -70000; i -= 50) {
+                const pole = new THREE.Mesh(poleGeo, poleMat); pole.position.set(-8, 4, i); scene.add(pole);
+            }
+
+            const psdMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.7, roughness: 0.3 });
+            const psdGlassMat = new THREE.MeshStandardMaterial({ color: 0xaaddff, transparent: true, opacity: 0.35, metalness: 0.8, roughness: 0.1, side: THREE.DoubleSide });
+
+            stationsData.forEach((st, index) => {
+                const platformGroup = new THREE.Group();
+                let stStopMarkZ = -12.5 - (index * 4000); 
+                let stCenterZ = stStopMarkZ + 105.5; 
+
+                // 月台地板
+                const platformGeo = new THREE.BoxGeometry(16, 3, 212);
+                const platformMat = new THREE.MeshLambertMaterial({ color: 0xcccccc });
+                const platform = new THREE.Mesh(platformGeo, platformMat);
+                platform.position.set(12.5, -0.6, 0); platformGroup.add(platform);
+
+                // --- 調整後：升高天花板，並在幕門上方加入垂直牆壁 ---
+                const stCeilingGeo = new THREE.BoxGeometry(16, 0.5, 212);
+                const stCeilingMat = new THREE.MeshLambertMaterial({ color: 0xe0e0e0 }); // 淺灰色反光天花板
+                const stCeiling = new THREE.Mesh(stCeilingGeo, stCeilingMat);
+                stCeiling.position.set(12.5, 9.0, 0); // 提升天花板高度至 9.0
+                platformGroup.add(stCeiling);
+
+                const beamGeo = new THREE.BoxGeometry(16, 0.6, 2);
+                const beamMat = new THREE.MeshLambertMaterial({ color: 0xbbbbbb });
+                // 每隔 20 米加一條橫樑，增加立體感
+                for(let z = 100; z > -100; z -= 20) {
+                    const beam = new THREE.Mesh(beamGeo, beamMat);
+                    beam.position.set(12.5, 8.7, z); // 橫樑貼住天花板下方
+                    platformGroup.add(beam);
+                }
+
+                // --- 新增：幕門上方的垂直牆壁 (路線圖 / 廣告面板牆) ---
+                // 填補幕門頂部 (5.6) 至天花板 (8.75) 之間的空隙
+                const psdUpperWallGeo = new THREE.BoxGeometry(0.5, 3.15, 212); 
+                const psdUpperWallMat = new THREE.MeshLambertMaterial({ color: 0x222222 }); // 深灰色金屬機房質感
+                const psdUpperWall = new THREE.Mesh(psdUpperWallGeo, psdUpperWallMat);
+                psdUpperWall.position.set(4.6, 7.175, 0); 
+                platformGroup.add(psdUpperWall);
+                
+                // 在上方牆壁加入一條車站專屬顏色的橫線作點綴 (模擬路線圖面板)
+                const psdUpperStripeGeo = new THREE.BoxGeometry(0.55, 0.3, 212);
+                const psdUpperStripe = new THREE.Mesh(psdUpperStripeGeo, new THREE.MeshLambertMaterial({ color: st.color }));
+                psdUpperStripe.position.set(4.6, 7.175, 0);
+                platformGroup.add(psdUpperStripe);
+                // ------------------------------------
+
+                const yellowStripGeo = new THREE.BoxGeometry(0.5, 0.1, 212);
+                const yellowMat = new THREE.MeshLambertMaterial({ color: 0xffcc00 });
+                const yellowStrip = new THREE.Mesh(yellowStripGeo, yellowMat);
+                yellowStrip.position.set(6.5, 0.95, 0); platformGroup.add(yellowStrip);
+
+                const wallGeo = new THREE.BoxGeometry(1, 15, 212);
+                const wallMat = new THREE.MeshLambertMaterial({ color: st.color });
+                const wall = new THREE.Mesh(wallGeo, wallMat);
+                wall.position.set(20, 7.5, 0); platformGroup.add(wall);
+
+                // --- 調整：月台前後兩端的封閉牆壁 ---
+                const endWallGeo = new THREE.BoxGeometry(15.4, 10, 1); // 調整高度配合新天花板
+                
+                // 前端牆壁 (列車駛入方向)
+                const frontEndWall = new THREE.Mesh(endWallGeo, wallMat);
+                frontEndWall.position.set(12.3, 4.5, 105.5); 
+                platformGroup.add(frontEndWall);
+                
+                // 後端牆壁 (列車駛出方向)
+                const backEndWall = new THREE.Mesh(endWallGeo, wallMat);
+                backEndWall.position.set(12.3, 4.5, -105.5);
+                platformGroup.add(backEndWall);
+                // ---------------------------------
+
+                // --- 調整後：車站名牌高度 ---
+                const signGeo = new THREE.PlaneGeometry(10, 2.5);
+                const signTex = createTextTexture(st.name, st.cssColor);
+                const signMat = new THREE.MeshBasicMaterial({ map: signTex });
+                for(let z = 80; z > -80; z -= 40) {
+                    const sign = new THREE.Mesh(signGeo, signMat);
+                    sign.position.set(19.4, 5.0, z); // 高度提升至 5.0 配合空間
+                    sign.rotation.y = -Math.PI / 2;
+                    platformGroup.add(sign);
+                }
+
+                for(let z = 90; z > -90; z -= 30) {
+                    const pLight = new THREE.PointLight(0xffffff, 0.6, 60);
+                    pLight.position.set(10, 8.5, z); // 燈光高度移至天花板下方
+                    platformGroup.add(pLight);
+                }
+
+                const stopBoardGeo = new THREE.BoxGeometry(2, 4, 0.5);
+                const stopBoardMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 }); 
+                const stopBoard = new THREE.Mesh(stopBoardGeo, stopBoardMat);
+                stopBoard.position.set(4, 2.9, stStopMarkZ - stCenterZ); 
+                platformGroup.add(stopBoard); 
+
+                const psdHeaderGeo = new THREE.BoxGeometry(0.4, 0.6, 212);
+                const psdHeader = new THREE.Mesh(psdHeaderGeo, psdMat);
+                psdHeader.position.set(4.6, 5.3, 0); 
+                platformGroup.add(psdHeader);
+
+                const psdStripeGeo = new THREE.BoxGeometry(0.45, 0.4, 212);
+                const psdStripe = new THREE.Mesh(psdStripeGeo, new THREE.MeshLambertMaterial({ color: st.color }));
+                psdStripe.position.set(4.6, 4.7, 0);
+                platformGroup.add(psdStripe);
+
+                const psdFooterGeo = new THREE.BoxGeometry(0.4, 0.3, 212);
+                const psdFooter = new THREE.Mesh(psdFooterGeo, psdMat);
+                psdFooter.position.set(4.6, 1.05, 0);
+                platformGroup.add(psdFooter);
+
+                let previousFixedEndZ = -106;
+
+                for (let c = 0; c < 8; c++) {
+                    for (let d of [-8, 0, 8]) {
+                        let doorCenterZ = c * 26.5 + d - 93;
+
+                        let fixedLength = (doorCenterZ - 1.6) - previousFixedEndZ;
+                        if (fixedLength > 0) {
+                            let fixedGeo = new THREE.BoxGeometry(0.1, 4.1, fixedLength);
+                            let fixedMesh = new THREE.Mesh(fixedGeo, psdGlassMat);
+                            fixedMesh.position.set(4.6, 2.95, previousFixedEndZ + fixedLength / 2);
+                            platformGroup.add(fixedMesh);
+                            
+                            let mapGeo = new THREE.BoxGeometry(0.12, 0.8, Math.min(fixedLength * 0.6, 2));
+                            let mapMat = new THREE.MeshLambertMaterial({ color: 0xdddddd });
+                            let mapMesh = new THREE.Mesh(mapGeo, mapMat);
+                            mapMesh.position.set(4.6, 3.1, previousFixedEndZ + fixedLength / 2);
+                            platformGroup.add(mapMesh);
+                        }
+
+                        let slidingGeo = new THREE.BoxGeometry(0.15, 4.1, 1.6);
+                        
+                        let psdDoorLeft = new THREE.Mesh(slidingGeo, psdGlassMat);
+                        psdDoorLeft.position.set(4.55, 2.95, doorCenterZ - 0.8);
+                        platformGroup.add(psdDoorLeft);
+
+                        let psdDoorRight = new THREE.Mesh(slidingGeo, psdGlassMat);
+                        psdDoorRight.position.set(4.55, 2.95, doorCenterZ + 0.8);
+                        platformGroup.add(psdDoorRight);
+
+                        psdDoorsArray.push({ mesh: psdDoorLeft, baseZ: doorCenterZ - 0.8, direction: -1 });
+                        psdDoorsArray.push({ mesh: psdDoorRight, baseZ: doorCenterZ + 0.8, direction: 1 });
+
+                        previousFixedEndZ = doorCenterZ + 1.6;
+                    }
+                }
+
+                let finalFixedLength = 106 - previousFixedEndZ;
+                if (finalFixedLength > 0) {
+                    let fixedGeo = new THREE.BoxGeometry(0.1, 4.1, finalFixedLength);
+                    let fixedMesh = new THREE.Mesh(fixedGeo, psdGlassMat);
+                    fixedMesh.position.set(4.6, 2.95, previousFixedEndZ + finalFixedLength / 2);
+                    platformGroup.add(fixedMesh);
+                }
+
+                platformGroup.position.z = stCenterZ;
+                scene.add(platformGroup);
+            });
+        }
+
+        // ================= 建立 8卡 中空列車與內部裝潢 =================
+        function createTrain() {
+            train = new THREE.Group();
+            doorsArray = [];
+            const numCars = 8; 
+            const carSpacing = 26.5;
+
+            const chassisMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.3 });
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.6, roughness: 0.3 });
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.9 });
+            const ceilingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
+            const seatMat = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.2 }); 
+            const poleMat = new THREE.MeshStandardMaterial({ color: 0xed1d24, metalness: 0.3, roughness: 0.4 }); 
+            windowMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, transparent: true, opacity: 0.6 }); 
+            const doorMat = new THREE.MeshStandardMaterial({ color: 0xbbbbbb, metalness: 0.8 });
+            
+            const acMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+            const frontMat = new THREE.MeshStandardMaterial({ color: 0x111111 }); 
+            const headlightMat = new THREE.MeshBasicMaterial({ color: 0xffffee }); 
+            const stripeMat = new THREE.MeshLambertMaterial({ color: 0xed1d24 });
+
+            for (let c = 0; c < numCars; c++) {
+                let carGroup = new THREE.Group();
+                let isHead = (c === 0);
+
+                const chassisGeo = new THREE.BoxGeometry(6, 0.5, 26);
+                const chassis = new THREE.Mesh(chassisGeo, chassisMat); chassis.position.y = 0.25; carGroup.add(chassis);
+                
+                const floorGeo = new THREE.BoxGeometry(5.8, 0.2, 25);
+                const floor = new THREE.Mesh(floorGeo, floorMat); floor.position.y = 0.8; carGroup.add(floor);
+                
+                const ceilingGeo = new THREE.BoxGeometry(5.8, 0.2, 25);
+                const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat); ceiling.position.y = 6.6; carGroup.add(ceiling);
+
+                const wallHeight = 5.8; const wallY = 3.7; const wallThickness = 0.2;
+                const lowerWallHeight = 1.6; const lowerWallY = 1.6;
+                const upperWallHeight = 2.8; const upperWallY = 5.2;
+                const windowHeight = 1.4; const windowY = 3.1;
+
+                const wallSegments = [
+                    { length: 3.7, z: -10.65 }, { length: 6.4, z: -4.0 }, { length: 6.4, z: 4.0 }, { length: 3.7, z: 10.65 }
+                ];
+
+                wallSegments.forEach(seg => {
+                    if (seg.length > 2) { 
+                        const lowerGeo = new THREE.BoxGeometry(wallThickness, lowerWallHeight, seg.length);
+                        let lwR = new THREE.Mesh(lowerGeo, bodyMat); lwR.position.set(2.8, lowerWallY, seg.z); carGroup.add(lwR);
+                        let lwL = new THREE.Mesh(lowerGeo, bodyMat); lwL.position.set(-2.8, lowerWallY, seg.z); carGroup.add(lwL);
+
+                        const upperGeo = new THREE.BoxGeometry(wallThickness, upperWallHeight, seg.length);
+                        let uwR = new THREE.Mesh(upperGeo, bodyMat); uwR.position.set(2.8, upperWallY, seg.z); carGroup.add(uwR);
+                        let uwL = new THREE.Mesh(upperGeo, bodyMat); uwL.position.set(-2.8, upperWallY, seg.z); carGroup.add(uwL);
+
+                        const pillarLength = 0.5;
+                        const pillarGeo = new THREE.BoxGeometry(wallThickness, windowHeight, pillarLength);
+                        
+                        let pilFrontZ = seg.z - seg.length/2 + pillarLength/2;
+                        let pilFrontR = new THREE.Mesh(pillarGeo, bodyMat); pilFrontR.position.set(2.8, windowY, pilFrontZ); carGroup.add(pilFrontR);
+                        let pilFrontL = new THREE.Mesh(pillarGeo, bodyMat); pilFrontL.position.set(-2.8, windowY, pilFrontZ); carGroup.add(pilFrontL);
+                        
+                        let pilBackZ = seg.z + seg.length/2 - pillarLength/2;
+                        let pilBackR = new THREE.Mesh(pillarGeo, bodyMat); pilBackR.position.set(2.8, windowY, pilBackZ); carGroup.add(pilBackR);
+                        let pilBackL = new THREE.Mesh(pillarGeo, bodyMat); pilBackL.position.set(-2.8, windowY, pilBackZ); carGroup.add(pilBackL);
+
+                        const winLength = seg.length - 1.0;
+                        const winGeo = new THREE.BoxGeometry(wallThickness + 0.05, windowHeight, winLength);
+                        const winR = new THREE.Mesh(winGeo, windowMat); winR.position.set(2.8, windowY, seg.z); carGroup.add(winR);
+                        const winL = new THREE.Mesh(winGeo, windowMat); winL.position.set(-2.8, windowY, seg.z); carGroup.add(winL);
+                        
+                        const seatBaseGeo = new THREE.BoxGeometry(0.6, 0.15, winLength); 
+                        const seatBackGeo = new THREE.BoxGeometry(0.15, 0.8, winLength); 
+                        
+                        const seatBaseR = new THREE.Mesh(seatBaseGeo, seatMat); seatBaseR.position.set(2.3, 1.35, seg.z); carGroup.add(seatBaseR);
+                        const seatBackR = new THREE.Mesh(seatBackGeo, seatMat); seatBackR.position.set(2.6, 1.8, seg.z); carGroup.add(seatBackR);
+
+                        const seatBaseL = new THREE.Mesh(seatBaseGeo, seatMat); seatBaseL.position.set(-2.3, 1.35, seg.z); carGroup.add(seatBaseL);
+                        const seatBackL = new THREE.Mesh(seatBackGeo, seatMat); seatBackL.position.set(-2.6, 1.8, seg.z); carGroup.add(seatBackL);
+
+                        const numSeats = Math.floor(winLength / 0.45); 
+                        const dividerGeo = new THREE.BoxGeometry(0.62, 0.17, 0.03); 
+                        const dividerMat = new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.4, roughness: 0.6 });
+                        let startZ = seg.z - winLength / 2 + 0.45;
+                        
+                        for(let i = 0; i < numSeats - 1; i++) {
+                            let divZ = startZ + i * 0.45;
+                            let divR = new THREE.Mesh(dividerGeo, dividerMat); divR.position.set(2.3, 1.35, divZ); carGroup.add(divR);
+                            let divL = new THREE.Mesh(dividerGeo, dividerMat); divL.position.set(-2.3, 1.35, divZ); carGroup.add(divL);
+                        }
+                    } else {
+                        const wallGeo = new THREE.BoxGeometry(wallThickness, wallHeight, seg.length);
+                        const wallR = new THREE.Mesh(wallGeo, bodyMat); wallR.position.set(2.8, wallY, seg.z); carGroup.add(wallR);
+                        const wallL = new THREE.Mesh(wallGeo, bodyMat); wallL.position.set(-2.8, wallY, seg.z); carGroup.add(wallL);
+                    }
+                });
+
+                for (let pz of [-8, 0, 8]) {
+                    const topFrameGeo = new THREE.BoxGeometry(wallThickness, 1.15, 1.6);
+                    const tfR = new THREE.Mesh(topFrameGeo, bodyMat); tfR.position.set(2.8, 6.025, pz); carGroup.add(tfR);
+                    const tfL = new THREE.Mesh(topFrameGeo, bodyMat); tfL.position.set(-2.8, 6.025, pz); carGroup.add(tfL);
+                }
+
+                if (!isHead) {
+                    const endWallGeo = new THREE.BoxGeometry(5.8, wallHeight, 0.2);
+                    const endWall = new THREE.Mesh(endWallGeo, bodyMat); endWall.position.set(0, wallY, -12.4); carGroup.add(endWall);
+                    
+                    const gangwayGeo = new THREE.BoxGeometry(4.8, 5.1, 1.5);
+                    const gangway = new THREE.Mesh(gangwayGeo, new THREE.MeshStandardMaterial({color: 0x222222}));
+                    gangway.position.set(0, 3.35, -13.25);
+                    carGroup.add(gangway);
+                }
+                const backWallGeo = new THREE.BoxGeometry(5.8, wallHeight, 0.2);
+                const backWall = new THREE.Mesh(backWallGeo, bodyMat); backWall.position.set(0, wallY, 12.4); carGroup.add(backWall);
+
+                const poleGeo = new THREE.CylinderGeometry(0.04, 0.04, wallHeight);
+                for (let pz of [-8, -4, 0, 4, 8]) {
+                    const pole = new THREE.Mesh(poleGeo, poleMat); pole.position.set(0, wallY, pz); carGroup.add(pole);
+                    if (pz === -8 || pz === 0 || pz === 8) {
+                        const pR1 = new THREE.Mesh(poleGeo, poleMat); pR1.position.set(1.5, wallY, pz - 1.0); carGroup.add(pR1);
+                        const pR2 = new THREE.Mesh(poleGeo, poleMat); pR2.position.set(1.5, wallY, pz + 1.0); carGroup.add(pR2);
+                        const pL1 = new THREE.Mesh(poleGeo, poleMat); pL1.position.set(-1.5, wallY, pz - 1.0); carGroup.add(pL1);
+                        const pL2 = new THREE.Mesh(poleGeo, poleMat); pL2.position.set(-1.5, wallY, pz + 1.0); carGroup.add(pL2);
+                    }
+                }
+
+                for (let lz of [-6, 6]) {
+                    const iLight = new THREE.PointLight(0xffffee, 0.6, 15);
+                    iLight.position.set(0, 6.0, lz);
+                    carGroup.add(iLight);
+                }
+
+                const roofGeo = new THREE.BoxGeometry(5.4, 0.8, 25);
+                const roof = new THREE.Mesh(roofGeo, bodyMat); roof.position.y = 7.1; carGroup.add(roof);
+                
+                const acGeo = new THREE.BoxGeometry(3, 0.8, 4);
+                for(let z of [-8, 0, 8]) {
+                    const ac = new THREE.Mesh(acGeo, acMat); ac.position.set(0, 7.6, z); carGroup.add(ac);
+                }
+
+                if (isHead) {
+                    const frontGeo = new THREE.BoxGeometry(5.9, 5.8, 0.5);
+                    const front = new THREE.Mesh(frontGeo, frontMat); 
+                    front.position.set(0, 3.7, -12.5); 
+                    carGroup.add(front);
+                    frontGlass = front; 
+
+                    const headlightGeo = new THREE.CircleGeometry(0.4, 16);
+                    const headlightMat = new THREE.MeshBasicMaterial({ color: 0xffffee }); 
+                    const hlLeft = new THREE.Mesh(headlightGeo, headlightMat); 
+                    hlLeft.position.set(-1.8, 2.0, -12.76); hlLeft.rotation.y = Math.PI; 
+                    carGroup.add(hlLeft);
+                    
+                    const hlRight = new THREE.Mesh(headlightGeo, headlightMat); 
+                    hlRight.position.set(1.8, 2.0, -12.76); hlRight.rotation.y = Math.PI; 
+                    carGroup.add(hlRight);
+
+                    const deskGeo = new THREE.BoxGeometry(5.8, 1.2, 1.5);
+                    const deskMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.5, roughness: 0.8 });
+                    const desk = new THREE.Mesh(deskGeo, deskMat);
+                    desk.position.set(0, 2.8, -11.5); 
+                    carGroup.add(desk);
+
+                    const screenGeo = new THREE.BoxGeometry(0.8, 0.6, 0.1);
+                    const screenMat = new THREE.MeshBasicMaterial({ color: 0x004400 }); 
+                    const screen = new THREE.Mesh(screenGeo, screenMat);
+                    screen.position.set(-1.5, 3.5, -11.8); screen.rotation.x = -Math.PI / 6; 
+                    carGroup.add(screen);
+
+                    // 牽引/制動 3D 推桿，綁定到全域變數與 UI 同步
+                    const leverGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.4);
+                    const leverMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+                    const leverMesh = new THREE.Mesh(leverGeo, leverMat);
+                    leverMesh.position.set(-0.8, 3.6, -11.5);
+                    leverMesh.rotation.x = Math.PI / 4;
+                    carGroup.add(leverMesh);
+                    driverLever3D = leverMesh; // 綁定
+
+                    // --- 新增：駕駛室與乘客車廂的間隔牆 ---
+                    // 主牆身
+                    const partitionGeo = new THREE.BoxGeometry(5.8, wallHeight, 0.2);
+                    const partitionWall = new THREE.Mesh(partitionGeo, bodyMat);
+                    partitionWall.position.set(0, wallY, -10.0); // 位於司機座位 Z(-10.5) 的後方
+                    carGroup.add(partitionWall);
+
+                    // 駕駛室通道門 (深灰色金屬)
+                    const partitionDoorGeo = new THREE.BoxGeometry(1.2, 4.2, 0.22);
+                    const partitionDoorMat = new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.5, roughness: 0.4 });
+                    const partitionDoor = new THREE.Mesh(partitionDoorGeo, partitionDoorMat);
+                    partitionDoor.position.set(0, 2.9, -10.0);
+                    carGroup.add(partitionDoor);
+
+                    // 門上的觀察玻璃窗 (讓乘客可以隱約看到駕駛室)
+                    const partitionWinGeo = new THREE.BoxGeometry(0.7, 1.2, 0.25);
+                    const partitionWin = new THREE.Mesh(partitionWinGeo, windowMat); // 使用現有的半透明車窗材質
+                    partitionWin.position.set(0, 3.6, -10.0);
+                    carGroup.add(partitionWin);
+                }
+
+                const stripeGeo = new THREE.BoxGeometry(6.05, 0.4, 25);
+                const stripe = new THREE.Mesh(stripeGeo, stripeMat); stripe.position.y = 0.8; carGroup.add(stripe);
+
+                const doorGeo = new THREE.BoxGeometry(0.15, 4.65, 1.6);
+                const doorWinGeo = new THREE.BoxGeometry(0.2, 1.4, 1.0); 
+                
+                for (let i = 0; i < 3; i++) {
+                    let doorZ = -8 + i * 8; 
+                    
+                    let doorRightLeft = new THREE.Group(); let drlMesh = new THREE.Mesh(doorGeo, doorMat); let drlWin = new THREE.Mesh(doorWinGeo, windowMat); drlWin.position.y = -0.025;
+                    doorRightLeft.add(drlMesh); doorRightLeft.add(drlWin); doorRightLeft.position.set(2.95, 3.125, doorZ - 0.8); 
+                    let doorRightRight = new THREE.Group(); let drrMesh = new THREE.Mesh(doorGeo, doorMat); let drrWin = new THREE.Mesh(doorWinGeo, windowMat); drrWin.position.y = -0.025;
+                    doorRightRight.add(drrMesh); doorRightRight.add(drrWin); doorRightRight.position.set(2.95, 3.125, doorZ + 0.8);
+
+                    carGroup.add(doorRightLeft); carGroup.add(doorRightRight);
+                    doorsArray.push({ mesh: doorRightLeft, baseZ: doorZ - 0.8, direction: -1, side: 'right' });
+                    doorsArray.push({ mesh: doorRightRight, baseZ: doorZ + 0.8, direction: 1, side: 'right' });
+
+                    let doorLeftLeft = new THREE.Group(); let dllMesh = new THREE.Mesh(doorGeo, doorMat); let dllWin = new THREE.Mesh(doorWinGeo, windowMat); dllWin.position.y = -0.025;
+                    doorLeftLeft.add(dllMesh); doorLeftLeft.add(dllWin); doorLeftLeft.position.set(-2.95, 3.125, doorZ - 0.8); 
+                    let doorLeftRight = new THREE.Group(); let dlrMesh = new THREE.Mesh(doorGeo, doorMat); let dlrWin = new THREE.Mesh(doorWinGeo, windowMat); dlrWin.position.y = -0.025;
+                    doorLeftRight.add(dlrMesh); doorLeftRight.add(dlrWin); doorLeftRight.position.set(-2.95, 3.125, doorZ + 0.8);
+
+                    carGroup.add(doorLeftLeft); carGroup.add(doorLeftRight);
+                    doorsArray.push({ mesh: doorLeftLeft, baseZ: doorZ - 0.8, direction: -1, side: 'left' });
+                    doorsArray.push({ mesh: doorLeftRight, baseZ: doorZ + 0.8, direction: 1, side: 'left' });
+                }
+
+                carGroup.position.z = c * carSpacing; 
+                train.add(carGroup);
+            }
+
+            train.position.set(0, 0, 0); scene.add(train);
+        }
+
+        // ================= 邏輯與控制 =================
+        function operateDoors(action) {
+            const holoBox = document.getElementById('hologram-box');
+            if (action === 'open' && perfectlyStopped) {
+                targetDoorProgress = 1;
+                doorsClosedMsgShown = false; // 重置旗標
+                
+                // 顯示精美的圖案化標誌 (在獨立的全息容器中)
+                holoBox.innerHTML = `
+                    <div style="background: rgba(0,0,0,0.7); padding: 20px; border-radius: 15px; display: inline-block;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#42a5f5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 80px; height: 80px; margin-bottom: 10px;">
+                            <path d="M14 12h8m0 0l-3-3m3 3l-3 3M10 12H2m0 0l3-3m-3 3l3 3M10 4v16M14 4v16"/>
+                        </svg><br>
+                        <span style="color: #42a5f5; font-size: 24px; text-shadow: none;">趟門打開</span>
+                    </div>
+                `;
+                
+                // 設定 1 秒後隱藏標誌
+                setTimeout(() => { 
+                    if(targetDoorProgress === 1 && holoBox.innerHTML.includes("趟門打開")) {
+                        holoBox.innerHTML = ""; 
+                    }
+                }, 1000);
+                
+                document.getElementById('btn-next-station').style.display = "none";
+            } else if (action === 'close') {
+                targetDoorProgress = 0;
+                
+                // 顯示精美的圖案化標誌
+                holoBox.innerHTML = `
+                    <div style="background: rgba(0,0,0,0.7); padding: 20px; border-radius: 15px; display: inline-block;">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="#ffa726" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width: 80px; height: 80px; margin-bottom: 10px;">
+                            <path d="M22 12h-8m0 0l3-3m-3 3l3 3M2 12h8m0 0l-3-3m3 3l-3 3M10 4v16M14 4v16"/>
+                        </svg><br>
+                        <span style="color: #ffa726; font-size: 24px; text-shadow: none;">車門關閉</span>
+                    </div>
+                `;
+                
+                // 設定 1 秒後隱藏標誌
+                setTimeout(() => { 
+                    if(targetDoorProgress === 0 && holoBox.innerHTML.includes("車門關閉")) {
+                        holoBox.innerHTML = ""; 
+                    }
+                }, 1000);
+            }
+        }
+
+        function goToNextStation() {
+            if (currentStationIndex < stationsData.length - 1) {
+                currentStationIndex++;
+                updateHUDStation();
+                
+                stopMarkZ = -12.5 - (currentStationIndex * 4000);
+
+                document.getElementById('btn-next-station').style.display = "none";
+                document.getElementById('door-controls').style.display = "none";
+                perfectlyStopped = false;
+                isOverrun = false;
+                
+                document.getElementById('message-box').innerText = "請推動手柄前往下一站！";
+                document.getElementById('message-box').style.color = "white";
+            } else {
+                document.getElementById('message-box').innerText = "🎉 已到達總站，感謝值班！";
+                document.getElementById('message-box').style.color = "#ffaa00";
+            }
+        }
+
+        // 自由視角與鏡頭縮放控制
+        function setupCameraControls() {
+            const container = document.getElementById('game-container');
+            const switchToManual = () => {
+                if (cameraMode === 'passenger' || cameraMode === 'driver') return; 
+                if(cameraMode !== 'manual') {
+                    cameraMode = 'manual';
+                    const btn = document.getElementById('btn-camera');
+                    btn.innerText = "🎥 手動視角"; btn.className = 'manual-mode';
+                }
+            };
+
+            container.addEventListener('mousedown', (e) => { 
+                isDragging = true; switchToManual(); previousMouseX = e.clientX; previousMouseY = e.clientY; 
+            });
+            container.addEventListener('mousemove', (e) => {
+                if (isDragging) { 
+                    let deltaX = e.clientX - previousMouseX;
+                    let deltaY = e.clientY - previousMouseY;
+                    if (cameraMode === 'passenger' || cameraMode === 'driver') {
+                        passAngleX -= deltaX * 0.005; passAngleY -= deltaY * 0.005; 
+                        if (passAngleY < -Math.PI/2.5) passAngleY = -Math.PI/2.5;
+                        if (passAngleY > Math.PI/2.5) passAngleY = Math.PI/2.5;
+                    } else {
+                        camAngleX -= deltaX * 0.005; camAngleY += deltaY * 0.005; 
+                    }
+                    previousMouseX = e.clientX; previousMouseY = e.clientY; 
+                }
+            });
+            container.addEventListener('mouseup', () => isDragging = false); 
+            container.addEventListener('mouseleave', () => isDragging = false);
+
+            container.addEventListener('wheel', (e) => {
+                if (cameraMode === 'passenger' || cameraMode === 'driver') {
+                    currentFov += e.deltaY * 0.05;
+                    if (currentFov < 20) currentFov = 20;   
+                    if (currentFov > 110) currentFov = 110; 
+                    camera.fov = currentFov; camera.updateProjectionMatrix();
+                } else {
+                    switchToManual(); camRadius += e.deltaY * 0.05;
+                    if (camRadius < 10) camRadius = 10;   
+                    if (camRadius > 200) camRadius = 200; 
+                }
+            }, { passive: true });
+
+            let initialPinchDistance = null;
+            container.addEventListener('touchstart', (e) => { 
+                switchToManual(); 
+                if (e.touches.length === 1) {
+                    isDragging = true; previousMouseX = e.touches[0].clientX; previousMouseY = e.touches[0].clientY; 
+                } else if (e.touches.length === 2) {
+                    isDragging = false; initialPinchDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                }
+            }, { passive: false });
+            
+            container.addEventListener('touchmove', (e) => {
+                if(e.target.tagName !== 'BUTTON') e.preventDefault(); 
+                if (isDragging && e.touches.length === 1) {
+                    let deltaX = e.touches[0].clientX - previousMouseX; let deltaY = e.touches[0].clientY - previousMouseY;
+                    if (cameraMode === 'passenger' || cameraMode === 'driver') {
+                        passAngleX -= deltaX * 0.008; passAngleY -= deltaY * 0.008; 
+                        if (passAngleY < -Math.PI/2.5) passAngleY = -Math.PI/2.5;
+                        if (passAngleY > Math.PI/2.5) passAngleY = Math.PI/2.5;
+                    } else {
+                        camAngleX -= deltaX * 0.008; camAngleY += deltaY * 0.008; 
+                    }
+                    previousMouseX = e.touches[0].clientX; previousMouseY = e.touches[0].clientY;
+                } else if (e.touches.length === 2 && initialPinchDistance !== null) {
+                    let currentDistance = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                    let delta = initialPinchDistance - currentDistance;
+                    if (cameraMode === 'passenger' || cameraMode === 'driver') {
+                        currentFov += delta * 0.1;
+                        if (currentFov < 20) currentFov = 20; if (currentFov > 110) currentFov = 110;
+                        camera.fov = currentFov; camera.updateProjectionMatrix();
+                    } else {
+                        camRadius += delta * 0.5;
+                        if (camRadius < 10) camRadius = 10; if (camRadius > 200) camRadius = 200;
+                    }
+                    initialPinchDistance = currentDistance;
+                }
+            }, { passive: false });
+            container.addEventListener('touchend', (e) => { if (e.touches.length < 2) initialPinchDistance = null; if (e.touches.length === 0) isDragging = false; });
+        }
+
+        window.toggleCameraMode = function() {
+            const btn = document.getElementById('btn-camera');
+            currentFov = 60; camera.fov = currentFov; camera.updateProjectionMatrix();
+            passAngleX = 0; passAngleY = 0;
+
+            if (cameraMode === 'auto' || cameraMode === 'manual') { 
+                cameraMode = 'driver'; btn.innerText = "👀 司機視角"; btn.className = 'driver-mode'; 
+                train.visible = true; if (frontGlass) frontGlass.visible = false; if (windowMat) windowMat.visible = true; 
+            } else if (cameraMode === 'driver') {
+                cameraMode = 'passenger'; btn.innerText = "🚶 乘客視角"; btn.className = 'passenger-mode'; 
+                train.visible = true; if (frontGlass) frontGlass.visible = true; if (windowMat) windowMat.visible = false; 
+            } else { 
+                cameraMode = 'auto'; btn.innerText = "🎥 自動視角"; btn.className = ''; 
+                train.visible = true; if (frontGlass) frontGlass.visible = true; if (windowMat) windowMat.visible = true; 
+            }
+        };
+
+        // ======= 全新：控制實體推桿邏輯 =======
+        function setDirection(dir) {
+            if (Math.abs(speed) > 0.01) {
+                const msgBox = document.getElementById('message-box');
+                msgBox.innerText = "⚠️ 必須完全停定才能切換方向！";
+                msgBox.style.color = "#ffaa00";
+                return;
+            }
+            currentDirection = dir;
+            document.getElementById('btn-dir-fwd').className = dir === 1 ? "dir-btn active" : "dir-btn";
+            document.getElementById('btn-dir-rev').className = dir === -1 ? "dir-btn active rev" : "dir-btn";
+            
+            const msgBox = document.getElementById('message-box');
+            msgBox.innerText = dir === 1 ? "➡️ 系統提示：切換至「前進」" : "⬅️ 系統提示：切換至「退後」";
+            msgBox.style.color = "white";
+            setTimeout(() => { if(msgBox.innerText.includes("系統提示")) msgBox.innerText = ""; }, 2000);
+        }
+
+        function setupLeverControl() {
+            const handle = document.getElementById('lever-handle');
+            const track = document.getElementById('lever-track');
+            let isDraggingLever = false;
+
+            function updateLever(clientY) {
+                const rect = track.getBoundingClientRect();
+                let y = clientY - rect.top;
+                y = Math.max(0, Math.min(y, rect.height)); 
+                
+                // 轉換邏輯掉轉：0為最頂(制動 -1), rect.height/2為中間(惰行 0), rect.height為最底(牽引 1)
+                let rawValue = (y / (rect.height / 2)) - 1;
+                
+                // 模擬物理手柄「落卡」：在中間點增加吸附範圍 (惰行區)
+                if (Math.abs(rawValue) < 0.15) rawValue = 0;
+                
+                // 車門未關閉的安全鎖定 (防衝出與防倒車)
+                if (Math.abs(rawValue) > 0 && (doorProgress > 0.05 || targetDoorProgress > 0)) {
+                    rawValue = 0;
+                    document.getElementById('message-box').innerText = "⚠️ 安全鎖定：請先關閉車門與幕門！";
+                    document.getElementById('message-box').style.color = "#ff4444";
+                }
+                
+                leverValue = rawValue;
+                
+                // 更新 UI 畫面上的手柄位置
+                let handleY = (leverValue + 1) * (rect.height / 2) - 25; 
+                handle.style.top = handleY + 'px';
+            }
+
+            // 滑鼠控制
+            handle.addEventListener('mousedown', (e) => { isDraggingLever = true; });
+            window.addEventListener('mousemove', (e) => { if (isDraggingLever) updateLever(e.clientY); });
+            window.addEventListener('mouseup', () => { isDraggingLever = false; });
+
+            // 觸控控制
+            handle.addEventListener('touchstart', (e) => { isDraggingLever = true; e.preventDefault(); updateLever(e.touches[0].clientY); }, { passive: false });
+            window.addEventListener('touchmove', (e) => { 
+                if (isDraggingLever) {
+                    if(e.target === handle || e.target === track) e.preventDefault();
+                    updateLever(e.touches[0].clientY); 
+                }
+            }, { passive: false });
+            window.addEventListener('touchend', () => { isDraggingLever = false; });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ================= 動畫引擎迴圈 =================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 同步 3D 駕駛室內部的推桿動畫
+            if (driverLever3D) {
+                // leverValue: 1(牽引, 拉向自己) -> 往後傾; 0(惰行) -> 置中; -1(制動, 推向前方) -> 往前傾
+                driverLever3D.rotation.x = (Math.PI / 4) + (leverValue * Math.PI / 8);
+            }
+
+            // 1. 全車門與月台幕門同步動畫
+            if (doorProgress !== targetDoorProgress) {
+                doorProgress += (targetDoorProgress - doorProgress) * 0.1;
+                if (Math.abs(doorProgress - targetDoorProgress) < 0.01) {
+                    doorProgress = targetDoorProgress;
+                    if (doorProgress === 0 && perfectlyStopped && !doorsClosedMsgShown) {
+                        doorsClosedMsgShown = true;
+                        const msgBox = document.getElementById('message-box');
+                        msgBox.innerText = "車門及幕門已關妥，請拉動手柄發車。";
+                        msgBox.style.color = "white";
+                        
+                        // 2秒後自動清除發車提示，保持畫面乾淨
+                        setTimeout(() => {
+                            if (doorsClosedMsgShown && msgBox.innerText.includes("發車")) {
+                                msgBox.innerText = "";
+                            }
+                        }, 2000);
+
+                        if (currentStationIndex < stationsData.length - 1) document.getElementById('btn-next-station').style.display = "block";
+                    }
+                }
+                doorsArray.forEach(door => { 
+                    if (door.side === 'right') door.mesh.position.z = door.baseZ + (doorProgress * 1.3 * door.direction); 
+                });
+                psdDoorsArray.forEach(psd => { psd.mesh.position.z = psd.baseZ + (doorProgress * 1.3 * psd.direction); });
+            }
+
+            // 2. 基於手柄推拉 (leverValue) 與方向掣 (currentDirection) 的列車物理
+            if (leverValue > 0) {
+                // 牽引 (Traction)
+                if (currentDirection === 1) {
+                    if (speed < 0) speed += 0.04; // 倒車中向前牽引會快速煞車
+                    else speed += 0.015 * leverValue; 
+                } else { // 退後模式
+                    if (speed > 0) speed -= 0.04; // 前進中向後牽引會快速煞車
+                    else speed -= 0.012 * leverValue; // 倒車加速
+                }
+                perfectlyStopped = false; isOverrun = false;
+                document.getElementById('door-controls').style.display = 'none';
+                if(Math.abs(speed) > 0.5 && document.getElementById('message-box').innerText.includes("發車")) {
+                    document.getElementById('message-box').innerText = "";
+                }
+            } else if (leverValue < 0) {
+                // 制動 (Braking)
+                if (speed > 0) {
+                    speed -= 0.04 * Math.abs(leverValue); 
+                } else if (speed < 0) {
+                    speed += 0.04 * Math.abs(leverValue);
+                }
+                if (Math.abs(speed) < 0.02) speed = 0; // 停定
+            } else { 
+                // 惰行 (Neutral)：自然減速
+                if (speed > 0) {
+                    speed -= 0.003; 
+                    if (speed < 0) speed = 0;
+                } else if (speed < 0) {
+                    speed += 0.003;
+                    if (speed > 0) speed = 0;
+                }
+            }
+
+            // 嚴格限制速度範圍
+            if (speed > 4.5) speed = 4.5; // 最高前進速度
+            if (speed < -1.5) speed = -1.5; // 最高倒車速度 (稍微放寬以便流暢倒車)
+            if (Math.abs(speed) < 0.001) speed = 0; // 防止數值微浮動
+
+            train.position.z -= speed;
+
+            // 3. 視角計算與內部自由控制
+            let trainHeadZ = train.position.z - 12.5;
+            let distanceToStop = trainHeadZ - stopMarkZ; 
+
+            if (cameraMode === 'driver') {
+                let targetCamX = train.position.x - 1.5; 
+                let targetCamY = train.position.y + 3.8; 
+                let targetCamZ = train.position.z - 10.5; 
+                camera.position.set(targetCamX, targetCamY, targetCamZ);
+                
+                let lookDirX = -Math.sin(passAngleX) * Math.cos(passAngleY);
+                let lookDirY = Math.sin(passAngleY);
+                let lookDirZ = -Math.cos(passAngleX) * Math.cos(passAngleY); 
+                let lookAtX = camera.position.x + lookDirX * 10;
+                let lookAtY = camera.position.y + lookDirY * 10;
+                let lookAtZ = camera.position.z + lookDirZ * 10;
+                camera.lookAt(lookAtX, lookAtY, lookAtZ);
+                
+            } else if (cameraMode === 'passenger') {
+                let targetCamX = train.position.x - 1.8; 
+                let targetCamY = train.position.y + 2.15; 
+                let targetCamZ = train.position.z - 3.0; 
+                camera.position.set(targetCamX, targetCamY, targetCamZ);
+                
+                let lookDirX = Math.cos(passAngleX) * Math.cos(passAngleY); 
+                let lookDirY = Math.sin(passAngleY);
+                let lookDirZ = -Math.sin(passAngleX) * Math.cos(passAngleY); 
+                let lookAtX = camera.position.x + lookDirX * 10;
+                let lookAtY = camera.position.y + lookDirY * 10;
+                let lookAtZ = camera.position.z + lookDirZ * 10;
+                camera.lookAt(lookAtX, lookAtY, lookAtZ);
+
+            } else {
+                if (cameraMode === 'auto') {
+                    let targetAngleX = 0.15; let targetAngleY = 0.3; let targetRadius = 85; 
+                    if (speed < 1.5 && Math.abs(distanceToStop) < 180) { targetAngleX = -0.5; targetAngleY = 0.1; targetRadius = 45; }
+                    camAngleX += (targetAngleX - camAngleX) * 0.05; camAngleY += (targetAngleY - camAngleY) * 0.05; camRadius += (targetRadius - camRadius) * 0.05;
+                }
+                
+                // 【升級】放寬車外視角極限：容許負角度，可以將鏡頭降到底部平視月台
+                if (camAngleY < -0.15) camAngleY = -0.15; 
+                if (camAngleY > Math.PI/2) camAngleY = Math.PI/2;
+                
+                // 【升級】將對焦點 (focusY) 由 6 降低至 4，對焦車身而唔係車頂
+                let focusX = train.position.x; let focusY = train.position.y + 4; let focusZ = train.position.z - 10;
+                
+                let targetCamX = focusX + camRadius * Math.sin(camAngleX) * Math.cos(camAngleY); 
+                let targetCamY = focusY + camRadius * Math.sin(camAngleY); 
+                let targetCamZ = focusZ + camRadius * Math.cos(camAngleX) * Math.cos(camAngleY);
+                
+                // 【防穿透】防止鏡頭穿落地底 (月台高度為 -0.6，限制鏡頭最低為 0.2)
+                if (targetCamY < 0.2) targetCamY = 0.2;
+
+                camera.position.x += (targetCamX - camera.position.x) * 0.2; 
+                camera.position.y += (targetCamY - camera.position.y) * 0.2; 
+                camera.position.z += (targetCamZ - camera.position.z) * 0.2;
+                
+                if(!camera.currentLookAt) camera.currentLookAt = new THREE.Vector3(focusX, focusY, focusZ);
+                camera.currentLookAt.x += (focusX - camera.currentLookAt.x) * 0.2; 
+                camera.currentLookAt.y += (focusY - camera.currentLookAt.y) * 0.2; 
+                camera.currentLookAt.z += (focusZ - camera.currentLookAt.z) * 0.2;
+                camera.lookAt(camera.currentLookAt);
+            }
+
+            // 4. UI 更新與進站判斷
+            document.getElementById('speed-display').innerText = Math.abs(speed * 30).toFixed(0); 
+            const distEl = document.getElementById('dist-display');
+            if (distanceToStop > 0) {
+                distEl.innerText = distanceToStop.toFixed(0);
+                distEl.className = distanceToStop < 300 ? "warning highlight" : "highlight";
+            } else { 
+                distEl.innerText = distanceToStop.toFixed(0);
+                distEl.className = "danger highlight";
+            }
+
+            if (distanceToStop < -2.5) { 
+                isOverrun = true;
+                if (speed === 0) {
+                    document.getElementById('message-box').innerText = "❌ 越過停車板！\n請切換至「退後」並拉動牽引手柄進行倒車";
+                    document.getElementById('message-box').style.color = "#ff4444";
+                } else if (speed < 0) {
+                    document.getElementById('message-box').innerText = "倒車中... 請留意停車標記";
+                    document.getElementById('message-box').style.color = "#ffaa00";
+                }
+            } 
+            else {
+                isOverrun = false; 
+                if (speed === 0 && distanceToStop < 200 && !perfectlyStopped) {
+                    if (distanceToStop <= 2.5 && distanceToStop >= -2.5) {
+                        perfectlyStopped = true; 
+                        train.position.z -= distanceToStop;
+                        distanceToStop = 0; 
+
+                        document.getElementById('message-box').innerText = "🌟 精準對齊停車！請開啟車門";
+                        document.getElementById('message-box').style.color = "#00ff00";
+                        document.getElementById('door-controls').style.display = 'flex';
+                    } else if (distanceToStop > 2.5) {
+                        document.getElementById('message-box').innerText = "⚠️ 停得太早，請確認「前進」方向再駛前\n(或切換「退後」倒車)";
+                        document.getElementById('message-box').style.color = "#ffaa00";
+                    }
+                } else if (speed < 0) {
+                    document.getElementById('message-box').innerText = "倒車中... 請留意停車標記";
+                    document.getElementById('message-box').style.color = "#ffaa00";
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = function() { init(); };
+    </script>
+</body>
+</html>
